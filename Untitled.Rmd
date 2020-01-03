@@ -1,0 +1,432 @@
+---
+    title: "Clusters de clientes Gamers"
+output: html_document
+---
+    
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r Datos}
+rm(list=ls())
+
+setwd("~/Documents/Karina/Gamers/Analisis mercado gamer/Bases AWS")
+base.usuarios <- read.csv("baseUsersClusterV1.csv", stringsAsFactors = FALSE)
+dir()
+
+# Renombrar variable:
+names(base.base.usuarios)[names(base.base.usuarios) == "txsteamauthorized"]="txpesossteamauthorized"
+
+options(scipen = 999)
+
+```
+
+
+```{r librerías}
+library(ClustOfVar)
+library(cluster)
+library(ggdendro)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(RColorBrewer)
+library(ggrepel)
+library(ggfortify)
+library(dendextend)
+```
+
+
+```{r Variables categóricas y numéricas}
+# Antiguedad
+base.usuarios$antiguedad <- as.numeric(Sys.Date()-as.Date(substr(base.usuarios$fechacreacionaccount,1,10)))
+
+# Mes solo, por si existe estacionalidad en consumo
+base.usuarios$mescreacionaccount <- as.numeric(substr(base.usuarios$mescreacionaccount,6,7))
+
+# Provincia
+provincia <- data.frame(idprovincia = seq(unique(base.usuarios$provincia)),
+                        provincia = sort(unique(base.usuarios$provincia)))
+base.usuarios <- merge(base.usuarios,provincia,by="provincia")
+rm(provincia)
+
+# Género
+base.usuarios$idgenero <- ifelse(base.usuarios$gender=="F",1,2)
+
+# Estado civil
+maritalstatus <- data.frame(idmaritalstatus = seq(unique(base.usuarios$maritalstatus)),
+                            maritalstatus = sort(unique(base.usuarios$maritalstatus)))
+base.usuarios <- merge(base.usuarios,maritalstatus,by="maritalstatus")
+rm(maritalstatus)
+
+# Ocupación
+ocupacion <- data.frame(idocupacion = seq(unique(base.usuarios$ocupacion)),
+                        ocupacion = sort(unique(base.usuarios$ocupacion)))
+base.usuarios <- merge(base.usuarios,ocupacion,by="ocupacion")
+rm(ocupacion)
+
+# Primera fecha: diferencia de días entre la fecha de primera TX y la fecha de creación de la cuenta
+base.usuarios$primerafechatxdias <- as.numeric(as.Date(base.usuarios$primerafechatx)-as.Date(substr(base.usuarios$fechacreacionaccount,1,10)))
+
+# Primera fecha steam: diferencia de días entre la fecha de primera TX Steam y la fecha de creación de la cuenta
+base.usuarios$primerfechaxsteam2 <- str_trim(base.usuarios$primerfechaxsteam)
+base.usuarios <- base.usuarios %>% mutate(primerfechaxsteam2 = case_when(
+    primerfechaxsteam2=="" ~ "2010-12-01",
+    TRUE ~ primerfechaxsteam2
+))
+
+base.usuarios$primerfechatxsteam <- as.numeric(as.Date(base.usuarios$primerfechatxsteam, format="YY-mm-dd")-as.Date(substr(base.usuarios$fechacreacionaccount,1,10)))
+
+
+numericas <- base.usuarios %>% select(
+    -account,
+    -fechacreacionaccount,
+    -provincia,
+    -nacionalidad,
+    -gender,
+    -maritalstatus,
+    -ocupacion,
+    -ultimafechatx,
+    -primerafechatx,
+    -ultimafechatxsteam,
+    -primerfechatxsteam
+)
+
+categoricas <- base.usuarios %>% select(
+    # mescreacionaccount,
+    # provincia,
+    # gender,
+    # maritalstatus,
+    # ocupacion,
+    ultimafechatx,
+    primerafechatx,
+    ultimafechatxsteam,
+    primerfechatxsteam)
+
+```
+
+```{r Normalización de variables}
+numericas <- numericas %>% mutate_all(scale)
+```
+
+
+```{r Árbol variables estandarizadas}
+tree <- hclustvar(X.quanti = numericas)
+```
+
+
+```{r Dendograma de variables}
+plot(tree)
+rect.hclust(tree, k = 8, border = "red")
+
+hc_den <- as.dendrogram(tree)
+plot(hc_den)
+den_color <- color_branches(hc_den,k=7 )
+plot(den_color)
+
+
+```
+
+```{r Dendogram horizontal}
+
+#convert cluster object to use with ggplot
+dendr <- dendro_data(tree, type="rectangle") 
+
+#your own labels (now rownames) are supplied in geom_text() and label=label
+ggplot() + 
+    geom_segment(data=segment(dendr), aes(x=x, y=y, xend=xend, yend=yend)) + 
+    geom_text(data=label(dendr), aes(x=x, y=y, label=label, hjust=0), size=3) +
+    coord_flip() + scale_y_reverse(expand=c(0.2, 0)) + 
+    # geom_vline(xintercept = 3)+
+    labs(
+        title="Cluster de variables",
+        y="height")+
+    theme(axis.line.y=element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.title.y=element_blank(),
+          panel.background=element_rect(fill="white"),
+          panel.grid=element_blank())
+```
+
+
+```{r Codo}
+set.seed(42)
+
+base.usuarios_clean <- base.usuarios %>% select(
+    canttxcanceled,
+    amountpesos,
+    antiguedad,
+    amountdolar,
+    txdolartxsteam,
+    txpesostxsteam,
+    idmaritalstatus,
+    idgenero,
+    idprovincia,
+    idocupacion,
+    edad,
+    canttxsteam) %>% 
+    mutate(id=rownames(base.usuarios_clean))
+
+
+base.usuarios_sample <- sample(seq_len(nrow(base.usuarios_clean)), size = 10000)
+base.usuarios_sample <- base.usuarios_clean %>% filter(id %in% base.usuarios_sample) %>% select(-id)
+
+k_max=10
+wss <- sapply(1:k_max, function(k){
+    kmeans(base.usuarios_sample, k, nstart=50,iter.max = 15 )$tot.withinss})
+
+wss
+
+plot(1:k_max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+```
+
+```{r Codo numericas scaled}
+
+# seleccionar variables en base al dendogram de Hclustvar
+numericas_2_clean <- numericas_2 %>% select(
+    # 1. Primero
+    # amountpesos,
+    # canttxcanceled,
+    canttxtotal,
+    # txpesos,
+    canttxauthorized,
+    # 2. Segundo
+    # mescreacionaccount,
+    antiguedad,
+    # amountdolar,
+    txdolar,
+    canttxrejected,
+    # 3. Tercero
+    # amountdolartxsteam,
+    # amountdolarsteamrejected,
+    # txdolartxsteam,
+    # txdolarsteamrejected,
+    # 4. Cuarto
+    # txdolarsteamauthorized,
+    # amountdolarsteamauthorized,
+    # 5. Quinto
+    # idocupacion,
+    # idprovincia,
+    # idgenero,
+    edad,
+    # idmaritalstatus,
+    # 6. Sexto
+    # amountpesossteamrejected,
+    # amountpesostxsteam,
+    # amountsteamauthorized,
+    esprimeratxsteam,
+    # canttxsteamrejected,
+    txpesossteamrejected,
+    canttxsteamauthorized,
+    # txsteamauthorized,
+    # canttxsteam,
+    txpesostxsteam,
+    # 7. Septimo
+    txdolarsteamcanceled,
+    # amountdolarsteamcanceled,
+    # 8. Octavo
+    # amountpesossteamcanceled,
+    # canttxsteamcanceled,
+    txpesossteamcanceled
+)
+
+
+set.seed(1234)
+numericas_2_clean <- numericas_2_clean %>% mutate(id=seq_len(nrow(numericas_2_clean)))
+ids_n <- sample(seq_len(nrow(numericas_2_clean)), size = 50000)
+numericas_2_clean_sample <- numericas_2_clean[ids_n,]   %>%  select(-id)
+
+rm(ids_n,numericas_2_clean, base.usuarios_sample_2, base.usuarios_2, numericas_2_sample2, numericas_2)
+ls()
+
+# k_max=10
+# wss <- sapply(1:k_max, function(k){
+#   kmeans(numericas_2_clean_sample, k, nstart=50,iter.max = 15 )$tot.withinss})
+# 
+# wss
+
+library(factoextra)
+# 
+# fviz_nbclust(x = numericas_2_clean_sample, FUNcluster = pam, method = "wss", k.max = 10,
+#              diss = dist(numericas_2_clean_sample, method = "euclidian"))
+
+
+calcular_totwithinss <- function(n_clusters, datos, iter.max=1000, nstart=50){
+    # Esta función aplica el algoritmo kmeans y devuelve la suma total de
+    # cuadrados internos.
+    cluster_kmeans <- kmeans(centers = n_clusters, x = datos, iter.max = iter.max,
+                             nstart = nstart)
+    return(cluster_kmeans$tot.withinss)
+}
+# Se aplica esta función con para diferentes valores de k
+total_withinss <- map_dbl(.x = 1:10,
+                          .f = calcular_totwithinss,
+                          datos = numericas_2_clean_sample)
+total_withinss
+
+# plot(1:k_max, wss,
+#      type="b", pch = 19, frame = FALSE, 
+#      xlab="Number of clusters K",
+#      ylab="Total within-clusters sum of squares")
+
+elbow <-data.frame(k=1:k_max, wss=total_withinss)
+
+ggplot(elbow, aes(x = k, y = wss)) +
+    geom_point() +
+    geom_line() +
+    scale_x_continuous(breaks = seq(1, 20, by = 1))+
+    labs(
+        title="Selección de número de clusters (K)",
+        x="Número de clusters (k)",
+        y="Total de suma de cuadrados within-clusters")
+
+```
+
+
+
+```{r Principal components analysis}
+numericas <- numericas %>% mutate(id=rownames(numericas)) %>% select(-txdolarsteamcanceled, -amountdolarsteamcanceled)
+base.usuarios_sample_pca <- sample(seq_len(nrow(numericas)), size = 10000)
+base.usuarios_sample_pca <- numericas %>% filter(id %in% base.usuarios_sample_pca) %>% select(-id)
+
+pca <- prcomp(base.usuarios_sample_pca, center = TRUE,scale. = TRUE)
+summary(pca)
+```
+```{r PCA Gráfico}
+ggbiplot(pca)
+```
+
+
+```{r PCA Gráfico}
+pca2 <- PCA(base.usuarios_sample_pca,graph = TRUE,scale.unit = TRUE)
+
+```
+
+```{r PCA gráfico}
+base.usuarios <- base.usuarios %>%   mutate(id=rownames(base.usuarios))
+
+base.usuarios_sample_2 <- sample(seq_len(nrow(base.usuarios)), size = 10000)
+base.usuarios_sample_2 <- base.usuarios_sample_2 %>% filter(id %in% base.usuarios_sample_2) %>% select(-id)
+
+autoplot(pca, data=base.usuarios_sample_pca, colour="idgenero",loadings=TRUE, loadings.label=FALSE)
+```
+
+
+
+```{r PCA gráfico}
+
+circleFun <- function(center = c(0,0),diameter = 1, npoints = 100){
+    r = diameter / 2
+    tt <- seq(0,2*pi,length.out = npoints)
+    xx <- center[1] + r * cos(tt)
+    yy <- center[2] + r * sin(tt)
+    return(data.frame(x = xx, y = yy))
+}
+
+circ <- circleFun(c(0,0),2,npoints = 500)
+
+pca.vars <- pca2$var$coord %>% data.frame
+pca.vars$vars <- rownames(pca.vars)
+
+vars.p <-  ggplot() +
+    geom_path(data = circ,aes(x,y), lty = 2, color = "grey", alpha = 0.7) +
+    geom_hline(yintercept = 0, lty = 2, color = "grey", alpha = 0.9) +
+    geom_vline(xintercept = 0, lty = 2, color = "grey", alpha = 0.9) +
+    geom_segment(data = pca.vars, aes(x = 0, xend = Dim.1, y = 0, yend = Dim.2),
+                 arrow = arrow(length = unit(0.025, "npc"), type = "open"), 
+                 lwd = 1) + 
+    geom_text(data = pca.vars, 
+              aes(x = Dim.1*1.15, y =  Dim.2*1.15, label = vars))+
+    xlab("PC 1") + 
+    ylab("PC2") +
+    coord_equal() +
+    theme_minimal() +
+    theme(panel.grid = element_blank(), 
+          panel.border = element_rect(fill= "transparent"))
+
+vars.p
+```
+
+
+```{r Correlation matrix}
+cor.mat <- cor(base.usuarios_sample,method = "spearman")
+cor.mat[lower.tri(cor.mat)] <- NA
+cor.mat <- melt(cor.mat)
+cor.mat <- na.omit(cor.mat)
+cor.mat$Var1 <- factor(cor.mat$Var1,levels = unique(cor.mat$Var1))
+cor.mat$Var2 <- factor(cor.mat$Var2,levels = unique(cor.mat$Var2))
+
+ggplot(data = cor.mat, aes(Var2, Var1, fill = value)) +
+    geom_tile(color = "white") +
+    # scale_fill_gradientn(colours = rev(brewer.pal(5,"RdYlBu")),
+    #                      name = "Spearman\nCorrelation") +
+    scale_fill_gradient2()+
+    theme_bw(base_size = 20) +
+    theme(
+        axis.text.x = element_text(
+            angle = 45, vjust = 1, hjust = 1
+        ),
+        legend.title = element_text(size = 16),
+        legend.position = "top"
+    ) +
+    coord_fixed() +
+    labs(x = "",y = "")+
+    geom_text(aes(label=round(value,2)), size=3)
+
+cor(base.usuarios$canttxsteam, base.usuarios$txpesostxsteam)
+
+base.usuarios$dif <- (base.usuarios$canttxsteam - base.usuarios$txpesostxsteam)
+
+table(base.usuarios$dif)
+```
+
+
+```{r}
+hclust1 <- numericas_2 %>% select(
+    # amountpesossteamrejected,
+    # amountpesostxsteam,
+    # amountsteamauthorized,
+    esprimeratxsteam,
+    # canttxsteamrejected,
+    txpesossteamrejected,
+    canttxsteamauthorized,
+    # txsteamauthorized,
+    # canttxsteam,
+    txpesostxsteam)
+
+cor.mat <- cor(hclust1,method = "spearman")
+cor.mat[lower.tri(cor.mat)] <- NA
+cor.mat <- melt(cor.mat)
+cor.mat <- na.omit(cor.mat)
+cor.mat$Var1 <- factor(cor.mat$Var1,levels = unique(cor.mat$Var1))
+cor.mat$Var2 <- factor(cor.mat$Var2,levels = unique(cor.mat$Var2))
+
+ggplot(data = cor.mat, aes(Var2, Var1, fill = value)) +
+    geom_tile(color = "white") +
+    # scale_fill_gradientn(colours = rev(brewer.pal(5,"RdYlBu")),
+    #                      name = "Spearman\nCorrelation") +
+    scale_fill_gradient2()+
+    theme_bw(base_size = 20) +
+    theme(
+        axis.text.x = element_text(
+            angle = 45, vjust = 1, hjust = 1, size = 7
+        ),
+        legend.title = element_text(size = 16),
+        legend.position = "top"
+    ) +
+    coord_fixed() +
+    labs(x = "",y = "")+
+    geom_text(aes(label=round(value,2)), size=3)
+
+```
+
+Contraer
+
+
+
+
+
